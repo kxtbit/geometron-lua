@@ -66,6 +66,54 @@
 #define LUAI_THROW(L,c)		_longjmp((c)->b, 1)
 #define LUAI_TRY(L,c,a)		if (_setjmp((c)->b) == 0) { a }
 #define luai_jmpbuf		jmp_buf
+#elif defined(LUA_USE_ASM_LONGJMP)
+
+typedef struct {
+  void* ret_addr;
+  void* stack_ptr;
+  void* stack_base;
+} impl_jmp_buf[1];
+__attribute__((naked,returns_twice,preserve_none))
+static int impl_setjmp(impl_jmp_buf buf) {
+  __asm__(
+    ".intel_syntax noprefix \n"
+    //save return address
+    "mov rbx, [rsp] \n"
+    "mov [r12], rbx \n"
+    //save return stack pointer
+    "lea rbx, [rsp+8] \n"
+    "mov [r12+8], rbx \n"
+    //save rbp
+    "mov [r12+16], rbp \n"
+    //return 0
+    "xor eax, eax \n"
+    "ret \n"
+    ".att_syntax prefix \n"
+  );
+}
+__attribute__((naked,noreturn))
+static void impl_longjmp(impl_jmp_buf buf, int ret) {
+  __asm__(
+    ".intel_syntax noprefix \n"
+    //load rbp
+    "mov rbp, [rcx+16] \n"
+    //load return stack pointer
+    "mov rsp, [rcx+8] \n"
+    //return ret
+    "mov eax, edx \n"
+    //if ret is 0 then return 1 instead
+    "test edx, edx \n"
+    "jnz ret_is_not_zero \n"
+    "mov eax, 1 \n"
+    "ret_is_not_zero: \n"
+    //jump to saved return address
+    "jmp [rcx] \n"
+    ".att_syntax prefix \n"
+  );
+}
+#define LUAI_THROW(L,c)   impl_longjmp((c)->b, 1)
+#define LUAI_TRY(L,c,a)   if (impl_setjmp((c)->b) == 0) { a }
+#define luai_jmpbuf   impl_jmp_buf
 
 #else							/* }{ */
 
